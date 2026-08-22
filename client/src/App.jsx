@@ -1,9 +1,10 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { SignIn, SignUp, useAuth } from '@clerk/react'
+
 import LandingPage from './pages/LandingPage'
 import CitizenDashboard from './pages/CitizenDashboard'
 import AuthorityDashboard from './pages/AuthorityDashboard'
-
+import ReportIssue from './pages/ReportIssue'
 
 
 function ProtectedRoute({ children }) {
@@ -14,20 +15,16 @@ function ProtectedRoute({ children }) {
   return isSignedIn ? children : <Navigate to="/sign-in" replace />
 }
 
-// function CitizenDashboard() {
-//   return <h1>Citizen Dashboard</h1>
-// }
-
-// function AuthorityDashboard() {
-//   return <h1>Authority Dashboard</h1>
-// }
 
 export default function App() {
   return (
     <Routes>
+
+      {/* Landing Page */}
       <Route path="/" element={<LandingPage />} />
 
 
+      {/* Authentication */}
       <Route
         path="/sign-in/*"
         element={
@@ -51,14 +48,47 @@ export default function App() {
           />
         }
       />
-      <Route path="/citizen" element={<CitizenDashboard />} />
 
-      <Route path="/authority" element={<AuthorityDashboard />} />
 
-      
-
-      <Route path="*" element={<Navigate to="/" replace />}
+      {/* Citizen Dashboard */}
+      <Route
+        path="/citizen"
+        element={
+          <ProtectedRoute>
+            <CitizenDashboard />
+          </ProtectedRoute>
+        }
       />
+
+
+      {/* Report Issue */}
+      <Route
+        path="/citizen/report"
+        element={
+          <ProtectedRoute>
+            <ReportIssue />
+          </ProtectedRoute>
+        }
+      />
+
+
+      {/* Authority Dashboard */}
+      <Route
+        path="/authority"
+        element={
+          <ProtectedRoute>
+            <AuthorityDashboard />
+          </ProtectedRoute>
+        }
+      />
+
+
+      {/* Unknown route */}
+      <Route
+        path="*"
+        element={<Navigate to="/" replace />}
+      />
+
     </Routes>
   )
 }
