@@ -2,6 +2,8 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { SignIn, SignUp, useAuth } from '@clerk/react'
 import LandingPage from './pages/LandingPage'
 import CitizenDashboard from './pages/CitizenDashboard'
+import AuthorityDashboard from './pages/AuthorityDashboard'
+
 
 
 function ProtectedRoute({ children }) {
@@ -16,9 +18,9 @@ function ProtectedRoute({ children }) {
 //   return <h1>Citizen Dashboard</h1>
 // }
 
-function AuthorityDashboard() {
-  return <h1>Authority Dashboard</h1>
-}
+// function AuthorityDashboard() {
+//   return <h1>Authority Dashboard</h1>
+// }
 
 export default function App() {
   return (
@@ -51,15 +53,11 @@ export default function App() {
       />
       <Route path="/citizen" element={<CitizenDashboard />} />
 
+      <Route path="/authority" element={<AuthorityDashboard />} />
+
       
 
-      <Route
-        path="/authority"
-        element={
-          <ProtectedRoute>
-            <AuthorityDashboard />
-          </ProtectedRoute>
-        }
+      <Route path="*" element={<Navigate to="/" replace />}
       />
     </Routes>
   )
