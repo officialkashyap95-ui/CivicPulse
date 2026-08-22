@@ -903,3 +903,17 @@ a {
         display: none
     }
 }
+
+.nav-link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.nav-link-button:hover {
+  color: #2563eb;
+}
