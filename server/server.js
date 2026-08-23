@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 
 import connectDB from "./config/db.js";
 import complaintRoutes from "./routes/complaintRoutes.js";
+import clusterRoutes from "./routes/clusterRoutes.js";
 
 dotenv.config();
 
@@ -41,6 +42,11 @@ app.use((err, req, res, next) => {
     message: "Internal server error",
   });
 });
+
+app.use(
+  "/api/clusters",
+  clusterRoutes
+);
 
 // Start server
 const PORT = process.env.PORT || 5001;

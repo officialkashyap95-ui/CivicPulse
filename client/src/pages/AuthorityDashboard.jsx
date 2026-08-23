@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   Bell,
@@ -22,56 +22,7 @@ import {
 
 import "./AuthorityDashboard.css";
 
-const incidents = [
-  {
-    id: "INC-1024",
-    title: "Water Pipeline Failure",
-    category: "Water Infrastructure",
-    location: "North Ward",
-    time: "2 hours ago",
-    reports: 128,
-    affected: "2,400",
-    priority: 9.8,
-    status: "CRITICAL",
-    color: "critical",
-  },
-  {
-    id: "INC-1025",
-    title: "Electrical Hazard",
-    category: "Public Safety",
-    location: "Market Road",
-    time: "3 hours ago",
-    reports: 74,
-    affected: "1,200",
-    priority: 9.6,
-    status: "CRITICAL",
-    color: "critical",
-  },
-  {
-    id: "INC-1026",
-    title: "Major Road Damage",
-    category: "Road Infrastructure",
-    location: "East Sector",
-    time: "Today",
-    reports: 96,
-    affected: "3,100",
-    priority: 9.4,
-    status: "HIGH",
-    color: "high",
-  },
-  {
-    id: "INC-1027",
-    title: "Garbage Accumulation",
-    category: "Waste Management",
-    location: "Central Ward",
-    time: "Yesterday",
-    reports: 42,
-    affected: "850",
-    priority: 8.7,
-    status: "HIGH",
-    color: "high",
-  },
-];
+const API_URL = "http://localhost:5001/api";
 
 function Logo() {
   return (
@@ -90,9 +41,11 @@ function Logo() {
 }
 
 function StatusBadge({ status }) {
+  const normalized = (status || "SUBMITTED").toUpperCase();
+
   return (
-    <span className={`status-badge ${status.toLowerCase()}`}>
-      {status}
+    <span className={`status-badge ${normalized.toLowerCase()}`}>
+      {normalized.replace("_", " ")}
     </span>
   );
 }
@@ -111,32 +64,334 @@ function MetricCard({ icon, title, value, text, type = "" }) {
   );
 }
 
+/*
+  Convert backend complaint into the structure
+  expected by the existing Authority Dashboard UI.
+*/
+function formatComplaint(complaint, index) {
+  const status = (complaint.status || "submitted").toUpperCase();
+
+  const severity = Number(complaint.severity || 0);
+  const infrastructureRisk = Number(
+    complaint.infrastructureRisk || 0
+  );
+
+  /*
+    Your backend currently stores severity and
+    infrastructureRisk.
+
+    Until the complete AI impact score is connected,
+    we calculate a temporary authority priority score.
+  */
+  let priority = Math.max(
+    severity,
+    infrastructureRisk
+  );
+
+  if (priority <= 0) {
+    priority = 5;
+  }
+
+  // Convert 0-100 score to 0-10
+  const priorityOutOf10 =
+    priority > 10 ? priority / 10 : priority;
+
+  let priorityStatus = "MEDIUM";
+
+  if (priorityOutOf10 >= 9) {
+    priorityStatus = "CRITICAL";
+  } else if (priorityOutOf10 >= 7) {
+    priorityStatus = "HIGH";
+  } else if (priorityOutOf10 >= 4) {
+    priorityStatus = "MEDIUM";
+  } else {
+    priorityStatus = "LOW";
+  }
+
+  return {
+    id:
+      complaint._id ||
+      `INC-${1000 + index}`,
+
+    title:
+      complaint.title ||
+      getCategoryTitle(complaint.category),
+
+    category:
+      formatCategory(complaint.category),
+
+    location:
+      complaint.locationName ||
+      "Reported Location",
+
+    time: formatTime(complaint.createdAt),
+
+    reports:
+      complaint.reportCount ||
+      1,
+
+    affected:
+      complaint.peopleAffected ||
+      "—",
+
+    priority:
+      Number(priorityOutOf10.toFixed(1)),
+
+    status:
+      priorityStatus,
+
+    complaintStatus:
+      status,
+
+    color:
+      priorityStatus === "CRITICAL"
+        ? "critical"
+        : priorityStatus === "HIGH"
+        ? "high"
+        : priorityStatus === "LOW"
+        ? "resolved"
+        : "medium",
+
+    description:
+      complaint.description || "",
+
+    imageUrl:
+      complaint.imageUrl || null,
+
+    latitude:
+      complaint.latitude,
+
+    longitude:
+      complaint.longitude,
+
+    severity,
+
+    infrastructureRisk,
+  };
+}
+
+function getCategoryTitle(category) {
+  const titles = {
+    water_leakage: "Water Leakage",
+    road_damage: "Road Damage",
+    garbage: "Garbage Accumulation",
+    streetlight: "Streetlight Outage",
+    electrical: "Electrical Hazard",
+    drainage: "Drainage Problem",
+    other: "Civic Issue",
+  };
+
+  return titles[category] || "Civic Issue";
+}
+
+function formatCategory(category) {
+  if (!category) return "Other";
+
+  return category
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) =>
+      letter.toUpperCase()
+    );
+}
+
+function formatTime(dateString) {
+  if (!dateString) return "Recently";
+
+  const date = new Date(dateString);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Recently";
+  }
+
+  const now = new Date();
+
+  const diff =
+    Math.floor(
+      (now.getTime() - date.getTime()) / 60000
+    );
+
+  if (diff < 1) return "Just now";
+
+  if (diff < 60) {
+    return `${diff} min ago`;
+  }
+
+  const hours = Math.floor(diff / 60);
+
+  if (hours < 24) {
+    return `${hours} hour${hours > 1 ? "s" : ""} ago`;
+  }
+
+  const days = Math.floor(hours / 24);
+
+  if (days === 1) return "Yesterday";
+
+  return `${days} days ago`;
+}
+
 export default function AuthorityDashboard() {
-  const [mobileMenu, setMobileMenu] = useState(false);
+  const [mobileMenu, setMobileMenu] =
+    useState(false);
 
-  // Modal state.
-  // null means no incident modal is open.
-  const [selectedIncident, setSelectedIncident] = useState(null);
+  const [selectedIncident, setSelectedIncident] =
+    useState(null);
 
-  // Incident used for the permanent AI Insight section.
-  const activeIncident = incidents[0];
+  const [complaints, setComplaints] =
+    useState([]);
 
-  const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState("All");
+  const [loading, setLoading] =
+    useState(true);
 
-  const filteredIncidents = incidents.filter((incident) => {
-    const searchText = search.toLowerCase().trim();
+  const [error, setError] =
+    useState("");
 
-    const matchesSearch =
-      incident.title.toLowerCase().includes(searchText) ||
-      incident.location.toLowerCase().includes(searchText) ||
-      incident.category.toLowerCase().includes(searchText);
+  const [search, setSearch] =
+    useState("");
 
-    const matchesFilter =
-      filter === "All" || incident.status === filter;
+  const [filter, setFilter] =
+    useState("All");
 
-    return matchesSearch && matchesFilter;
-  });
+  /*
+    ================================
+    FETCH COMPLAINTS
+    ================================
+  */
+
+  const fetchComplaints = async () => {
+    try {
+      setLoading(true);
+      setError("");
+
+      const response = await fetch(
+        `${API_URL}/complaints`
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          `Server returned ${response.status}`
+        );
+      }
+
+      const data = await response.json();
+
+      if (!data.success) {
+        throw new Error(
+          data.message ||
+            "Failed to load complaints"
+        );
+      }
+
+      setComplaints(
+        Array.isArray(data.complaints)
+          ? data.complaints
+          : []
+      );
+    } catch (err) {
+      console.error(
+        "Authority dashboard error:",
+        err
+      );
+
+      setError(
+        "Unable to load complaints. Make sure the CivicPulse server is running."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchComplaints();
+  }, []);
+
+  /*
+    Convert backend complaints into
+    dashboard incidents.
+  */
+
+  const incidents = useMemo(() => {
+    return complaints
+      .map(formatComplaint)
+      .sort(
+        (a, b) =>
+          b.priority - a.priority
+      );
+  }, [complaints]);
+
+  /*
+    ACTIVE INCIDENT
+  */
+
+  const activeIncident =
+    selectedIncident ||
+    incidents[0] ||
+    null;
+
+  /*
+    FILTER
+  */
+
+  const filteredIncidents =
+    incidents.filter((incident) => {
+      const searchText =
+        search.toLowerCase().trim();
+
+      const matchesSearch =
+        incident.title
+          .toLowerCase()
+          .includes(searchText) ||
+        incident.location
+          .toLowerCase()
+          .includes(searchText) ||
+        incident.category
+          .toLowerCase()
+          .includes(searchText);
+
+      const matchesFilter =
+        filter === "All" ||
+        incident.status === filter;
+
+      return (
+        matchesSearch &&
+        matchesFilter
+      );
+    });
+
+  /*
+    ================================
+    METRICS
+    ================================
+  */
+
+  const criticalCount =
+    incidents.filter(
+      (item) =>
+        item.status === "CRITICAL"
+    ).length;
+
+  const highCount =
+    incidents.filter(
+      (item) =>
+        item.status === "HIGH"
+    ).length;
+
+  const pendingCount =
+    complaints.filter(
+      (item) =>
+        !["resolved", "closed"].includes(
+          (item.status || "")
+            .toLowerCase()
+        )
+    ).length;
+
+  const resolvedCount =
+    complaints.filter(
+      (item) =>
+        ["resolved", "closed"].includes(
+          (item.status || "")
+            .toLowerCase()
+        )
+    ).length;
 
   return (
     <div className="authority-page">
@@ -147,28 +402,35 @@ export default function AuthorityDashboard() {
 
         <Logo />
 
-        <nav className={`main-nav ${mobileMenu ? "mobile-open" : ""}`}>
-
-          <a className="active" href="#">
+        <nav
+          className={`main-nav ${
+            mobileMenu
+              ? "mobile-open"
+              : ""
+          }`}
+        >
+          <a
+            className="active"
+            href="#overview"
+          >
             Overview
           </a>
 
-          <a href="#">
+          <a href="#priority">
             Priority Queue
           </a>
 
-          <a href="#">
+          <a href="#issues">
             All Issues
           </a>
 
-          <a href="#">
+          <a href="#map">
             City Map
           </a>
 
-          <a href="#">
+          <a href="#analytics">
             Analytics
           </a>
-
         </nav>
 
         <div className="nav-right">
@@ -178,38 +440,54 @@ export default function AuthorityDashboard() {
             aria-label="Notifications"
           >
             <Bell size={19} />
+
             <span className="notification-dot" />
           </button>
 
           <div className="profile">
 
             <div className="profile-avatar">
-              RS
+              AU
             </div>
 
             <div className="profile-info">
-              <strong>Rahul Sharma</strong>
-              <span>Municipal Officer</span>
+              <strong>
+                Authority
+              </strong>
+
+              <span>
+                Municipal Officer
+              </span>
             </div>
 
           </div>
 
           <button
             className="mobile-menu-button"
-            onClick={() => setMobileMenu((prev) => !prev)}
+            onClick={() =>
+              setMobileMenu(
+                (prev) => !prev
+              )
+            }
             aria-label="Toggle menu"
           >
-            {mobileMenu ? <X /> : <Menu />}
+            {mobileMenu ? (
+              <X />
+            ) : (
+              <Menu />
+            )}
           </button>
 
         </div>
 
       </header>
 
-
       {/* ================= MAIN ================= */}
 
-      <main className="dashboard-container">
+      <main
+        className="dashboard-container"
+        id="overview"
+      >
 
         {/* ================= WELCOME ================= */}
 
@@ -222,25 +500,48 @@ export default function AuthorityDashboard() {
             </p>
 
             <h1>
-              Good morning, Rahul.
+              Good morning, Authority.
             </h1>
 
             <p className="welcome-text">
-              Monitor civic issues, prioritize urgent incidents,
-              and coordinate faster responses.
+              Monitor civic issues, prioritize
+              urgent incidents, and coordinate
+              faster responses.
             </p>
 
           </div>
 
           <div className="welcome-actions">
 
-            <button className="primary-button">
+            <button
+              className="primary-button"
+              onClick={() =>
+                document
+                  .getElementById(
+                    "priority"
+                  )
+                  ?.scrollIntoView({
+                    behavior: "smooth",
+                  })
+              }
+            >
               View priority queue
+
               <ArrowRight size={17} />
             </button>
 
-            <button className="secondary-button">
+            <button
+              className="secondary-button"
+              onClick={() =>
+                document
+                  .getElementById("map")
+                  ?.scrollIntoView({
+                    behavior: "smooth",
+                  })
+              }
+            >
               <MapPin size={17} />
+
               Open city map
             </button>
 
@@ -248,6 +549,24 @@ export default function AuthorityDashboard() {
 
         </section>
 
+        {/* ================= ERROR ================= */}
+
+        {error && (
+          <div className="empty-state">
+            <CircleAlert size={25} />
+
+            <strong>
+              {error}
+            </strong>
+
+            <button
+              className="primary-button"
+              onClick={fetchComplaints}
+            >
+              Retry
+            </button>
+          </div>
+        )}
 
         {/* ================= METRICS ================= */}
 
@@ -255,35 +574,58 @@ export default function AuthorityDashboard() {
 
           <MetricCard
             type="critical-card"
-            icon={<CircleAlert size={20} />}
+            icon={
+              <CircleAlert size={20} />
+            }
             title="Critical issues"
-            value="12"
+            value={
+              loading
+                ? "—"
+                : criticalCount
+            }
             text="Needs immediate attention"
           />
 
           <MetricCard
-            icon={<TriangleAlert size={20} />}
+            icon={
+              <TriangleAlert size={20} />
+            }
             title="High priority"
-            value="37"
+            value={
+              loading
+                ? "—"
+                : highCount
+            }
             text="Currently active"
           />
 
           <MetricCard
-            icon={<Clock3 size={20} />}
+            icon={
+              <Clock3 size={20} />
+            }
             title="Pending"
-            value="284"
+            value={
+              loading
+                ? "—"
+                : pendingCount
+            }
             text="Awaiting action"
           />
 
           <MetricCard
-            icon={<CheckCircle2 size={20} />}
+            icon={
+              <CheckCircle2 size={20} />
+            }
             title="Resolved"
-            value="892"
-            text="This month"
+            value={
+              loading
+                ? "—"
+                : resolvedCount
+            }
+            text="All recorded"
           />
 
         </section>
-
 
         {/* ================= MAIN GRID ================= */}
 
@@ -295,7 +637,10 @@ export default function AuthorityDashboard() {
 
             {/* ===== PRIORITY QUEUE ===== */}
 
-            <div className="dashboard-card">
+            <div
+              className="dashboard-card"
+              id="priority"
+            >
 
               <div className="card-header">
 
@@ -306,18 +651,27 @@ export default function AuthorityDashboard() {
                   </p>
 
                   <h2>
-                    Incidents requiring attention
+                    Incidents requiring
+                    attention
                   </h2>
 
                 </div>
 
-                <button className="text-button">
+                <button
+                  className="text-button"
+                  onClick={() => {
+                    setSearch("");
+                    setFilter("All");
+                  }}
+                >
                   View all
-                  <ArrowRight size={15} />
+
+                  <ArrowRight
+                    size={15}
+                  />
                 </button>
 
               </div>
-
 
               {/* SEARCH */}
 
@@ -331,13 +685,14 @@ export default function AuthorityDashboard() {
                     type="text"
                     value={search}
                     onChange={(event) =>
-                      setSearch(event.target.value)
+                      setSearch(
+                        event.target.value
+                      )
                     }
                     placeholder="Search incidents..."
                   />
 
                 </div>
-
 
                 <div className="filter-select">
 
@@ -346,7 +701,9 @@ export default function AuthorityDashboard() {
                   <select
                     value={filter}
                     onChange={(event) =>
-                      setFilter(event.target.value)
+                      setFilter(
+                        event.target.value
+                      )
                     }
                   >
 
@@ -362,109 +719,166 @@ export default function AuthorityDashboard() {
                       High
                     </option>
 
+                    <option value="MEDIUM">
+                      Medium
+                    </option>
+
+                    <option value="LOW">
+                      Low
+                    </option>
+
                   </select>
 
                 </div>
 
               </div>
 
-
               {/* INCIDENT LIST */}
 
-              <div className="incident-list">
+              <div
+                className="incident-list"
+                id="issues"
+              >
 
-                {filteredIncidents.length > 0 ? (
+                {loading ? (
+                  <div className="empty-state">
 
-                  filteredIncidents.map((incident) => (
+                    <Clock3 size={25} />
 
-                    <div
-                      className={`incident-row ${
-                        selectedIncident?.id === incident.id
-                          ? "selected"
-                          : ""
-                      }`}
-                      key={incident.id}
-                      onClick={() =>
-                        setSelectedIncident(incident)
-                      }
-                    >
+                    <strong>
+                      Loading civic issues...
+                    </strong>
+
+                    <span>
+                      Fetching reports from
+                      MongoDB.
+                    </span>
+
+                  </div>
+                ) : filteredIncidents.length >
+                  0 ? (
+
+                  filteredIncidents.map(
+                    (incident) => (
 
                       <div
-                        className={`incident-icon ${incident.color}`}
+                        className={`incident-row ${
+                          activeIncident?.id ===
+                          incident.id
+                            ? "selected"
+                            : ""
+                        }`}
+                        key={incident.id}
+                        onClick={() =>
+                          setSelectedIncident(
+                            incident
+                          )
+                        }
                       >
 
-                        {incident.status === "CRITICAL" ? (
-                          <CircleAlert size={19} />
-                        ) : (
-                          <TriangleAlert size={19} />
-                        )}
+                        <div
+                          className={`incident-icon ${incident.color}`}
+                        >
 
-                      </div>
-
-
-                      <div className="incident-main">
-
-                        <div className="incident-title-row">
-
-                          <h3>
-                            {incident.title}
-                          </h3>
-
-                          <StatusBadge
-                            status={incident.status}
-                          />
+                          {incident.status ===
+                          "CRITICAL" ? (
+                            <CircleAlert
+                              size={19}
+                            />
+                          ) : (
+                            <TriangleAlert
+                              size={19}
+                            />
+                          )}
 
                         </div>
 
-                        <p>
-                          {incident.category} ·{" "}
-                          {incident.location}
-                        </p>
+                        <div className="incident-main">
 
+                          <div className="incident-title-row">
 
-                        <div className="incident-meta">
+                            <h3>
+                              {incident.title}
+                            </h3>
 
-                          <span>
-                            <Clock3 size={13} />
-                            {incident.time}
-                          </span>
+                            <StatusBadge
+                              status={
+                                incident.status
+                              }
+                            />
 
-                          <span>
-                            <FileText size={13} />
-                            {incident.reports} reports
-                          </span>
+                          </div>
 
-                          <span>
-                            <Users size={13} />
-                            {incident.affected} affected
-                          </span>
+                          <p>
+                            {
+                              incident.category
+                            }{" "}
+                            ·{" "}
+                            {
+                              incident.location
+                            }
+                          </p>
+
+                          <div className="incident-meta">
+
+                            <span>
+                              <Clock3
+                                size={13}
+                              />
+
+                              {
+                                incident.time
+                              }
+                            </span>
+
+                            <span>
+                              <FileText
+                                size={13}
+                              />
+
+                              {
+                                incident.reports
+                              }{" "}
+                              reports
+                            </span>
+
+                            <span>
+                              <Users
+                                size={13}
+                              />
+
+                              {
+                                incident.affected
+                              }{" "}
+                              affected
+                            </span>
+
+                          </div>
 
                         </div>
 
+                        <div className="priority-score">
+
+                          <span>
+                            Priority
+                          </span>
+
+                          <strong>
+                            {
+                              incident.priority
+                            }
+                          </strong>
+
+                        </div>
+
+                        <ChevronRight
+                          className="incident-arrow"
+                          size={19}
+                        />
+
                       </div>
-
-
-                      <div className="priority-score">
-
-                        <span>
-                          Priority
-                        </span>
-
-                        <strong>
-                          {incident.priority}
-                        </strong>
-
-                      </div>
-
-
-                      <ChevronRight
-                        className="incident-arrow"
-                        size={19}
-                      />
-
-                    </div>
-
-                  ))
+                    )
+                  )
 
                 ) : (
 
@@ -477,7 +891,8 @@ export default function AuthorityDashboard() {
                     </strong>
 
                     <span>
-                      Try another search or filter.
+                      No complaints match
+                      your current filter.
                     </span>
 
                   </div>
@@ -488,165 +903,210 @@ export default function AuthorityDashboard() {
 
             </div>
 
-
             {/* ===== AI INSIGHT ===== */}
 
-            <div className="ai-insight">
+            {activeIncident && (
+              <div className="ai-insight">
 
-              <div className="ai-header">
+                <div className="ai-header">
 
-                <div className="ai-icon">
-                  <Sparkles size={19} />
+                  <div className="ai-icon">
+                    <Sparkles
+                      size={19}
+                    />
+                  </div>
+
+                  <div>
+
+                    <p className="eyebrow">
+                      AI INSIGHT
+                    </p>
+
+                    <h2>
+                      Why{" "}
+                      {
+                        activeIncident.title
+                      }{" "}
+                      needs attention
+                    </h2>
+
+                  </div>
+
                 </div>
 
-                <div>
+                <div className="ai-score">
 
-                  <p className="eyebrow">
-                    AI INSIGHT
-                  </p>
+                  <div>
 
-                  <h2>
-                    Why {activeIncident.title} is critical
-                  </h2>
+                    <span>
+                      AI Priority Score
+                    </span>
+
+                    <strong>
+                      {
+                        activeIncident.priority
+                      }{" "}
+                      / 10
+                    </strong>
+
+                  </div>
+
+                  <div className="score-bar">
+
+                    <div
+                      style={{
+                        width: `${Math.min(
+                          activeIncident.priority *
+                            10,
+                          100
+                        )}%`,
+                      }}
+                    />
+
+                  </div>
 
                 </div>
 
-              </div>
+                <div className="ai-metrics">
 
+                  <div>
+                    <span>
+                      Severity
+                    </span>
 
-              {/* SCORE */}
+                    <strong>
+                      {Math.min(
+                        activeIncident
+                          .severity,
+                        100
+                      ) / 10}
+                      /10
+                    </strong>
+                  </div>
 
-              <div className="ai-score">
+                  <div>
+                    <span>
+                      Infrastructure Risk
+                    </span>
 
-                <div>
+                    <strong>
+                      {Math.min(
+                        activeIncident
+                          .infrastructureRisk,
+                        100
+                      ) / 10}
+                      /10
+                    </strong>
+                  </div>
 
-                  <span>
-                    AI Priority Score
-                  </span>
+                  <div>
+                    <span>
+                      Reports
+                    </span>
+
+                    <strong>
+                      {
+                        activeIncident.reports
+                      }
+                    </strong>
+                  </div>
+
+                  <div>
+                    <span>
+                      Priority
+                    </span>
+
+                    <strong>
+                      {
+                        activeIncident.priority
+                      }
+                      /10
+                    </strong>
+                  </div>
+
+                </div>
+
+                <div className="ai-detected">
 
                   <strong>
-                    {activeIncident.priority} / 10
+                    Report details
                   </strong>
 
+                  <ul>
+
+                    <li>
+                      Category:{" "}
+                      {
+                        activeIncident.category
+                      }
+                    </li>
+
+                    <li>
+                      Reported{" "}
+                      {
+                        activeIncident.time
+                      }
+                    </li>
+
+                    <li>
+                      Location:
+                      {" "}
+                      {
+                        activeIncident.location
+                      }
+                    </li>
+
+                    {activeIncident
+                      .description && (
+                      <li>
+                        {
+                          activeIncident.description
+                        }
+                      </li>
+                    )}
+
+                  </ul>
+
                 </div>
 
+                <div className="recommendation">
 
-                <div className="score-bar">
+                  <span>
+                    Recommended action
+                  </span>
 
-                  <div
-                    style={{
-                      width: `${activeIncident.priority * 10}%`,
-                    }}
-                  />
+                  <p>
+                    Review this incident
+                    and assign the
+                    appropriate municipal
+                    department.
+                  </p>
+
+                </div>
+
+                <div className="ai-actions">
+
+                  <button
+                    className="primary-button"
+                    onClick={() =>
+                      setSelectedIncident(
+                        activeIncident
+                      )
+                    }
+                  >
+                    View incident
+
+                    <ArrowRight
+                      size={16}
+                    />
+                  </button>
 
                 </div>
 
               </div>
-
-
-              {/* AI METRICS */}
-
-              <div className="ai-metrics">
-
-                <div>
-                  <span>Severity</span>
-                  <strong>10/10</strong>
-                </div>
-
-                <div>
-                  <span>Public Impact</span>
-                  <strong>9/10</strong>
-                </div>
-
-                <div>
-                  <span>Urgency</span>
-                  <strong>10/10</strong>
-                </div>
-
-                <div>
-                  <span>Location Risk</span>
-                  <strong>10/10</strong>
-                </div>
-
-              </div>
-
-
-              {/* DETECTION */}
-
-              <div className="ai-detected">
-
-                <strong>
-                  AI detected
-                </strong>
-
-                <ul>
-
-                  <li>
-                    128 citizen reports
-                  </li>
-
-                  <li>
-                    2,400 people potentially affected
-                  </li>
-
-                  <li>
-                    Reports increasing rapidly
-                  </li>
-
-                  <li>
-                    Located near a school
-                  </li>
-
-                  <li>
-                    Main road partially blocked
-                  </li>
-
-                </ul>
-
-              </div>
-
-
-              {/* RECOMMENDATION */}
-
-              <div className="recommendation">
-
-                <span>
-                  Recommended action
-                </span>
-
-                <p>
-                  Dispatch Water &amp; Sanitation
-                  immediately.
-                </p>
-
-              </div>
-
-
-              <div className="ai-actions">
-
-                <button className="primary-button">
-
-                  Assign department
-
-                  <ArrowRight size={16} />
-
-                </button>
-
-                <button
-                  className="secondary-button"
-                  onClick={() =>
-                    setSelectedIncident(activeIncident)
-                  }
-                >
-                  View incident
-                </button>
-
-              </div>
-
-            </div>
+            )}
 
           </div>
-
 
           {/* ================= RIGHT COLUMN ================= */}
 
@@ -654,7 +1114,10 @@ export default function AuthorityDashboard() {
 
             {/* ===== CITY MAP ===== */}
 
-            <div className="dashboard-card map-card">
+            <div
+              className="dashboard-card map-card"
+              id="map"
+            >
 
               <div className="card-header">
 
@@ -676,7 +1139,6 @@ export default function AuthorityDashboard() {
 
               </div>
 
-
               <div className="fake-map">
 
                 <div className="road road-1" />
@@ -685,14 +1147,28 @@ export default function AuthorityDashboard() {
                 <div className="road road-4" />
                 <div className="road road-5" />
 
-                <span className="map-marker critical m1" />
-                <span className="map-marker high m2" />
-                <span className="map-marker critical m3" />
-                <span className="map-marker resolved m4" />
-                <span className="map-marker selected m5" />
+                {incidents
+                  .slice(0, 5)
+                  .map(
+                    (incident, index) => (
+                      <span
+                        key={incident.id}
+                        className={`map-marker ${
+                          incident.status ===
+                          "CRITICAL"
+                            ? "critical"
+                            : incident.status ===
+                              "HIGH"
+                            ? "high"
+                            : "resolved"
+                        } m${
+                          index + 1
+                        }`}
+                      />
+                    )
+                  )}
 
               </div>
-
 
               <div className="map-legend">
 
@@ -708,68 +1184,105 @@ export default function AuthorityDashboard() {
 
                 <span>
                   <i className="legend-dot resolved" />
-                  Resolved
+                  Other
                 </span>
 
               </div>
 
+              {activeIncident && (
+                <div className="map-incident">
 
-              <div className="map-incident">
+                  <div>
 
-                <div>
+                    <div className="map-incident-title">
 
-                  <div className="map-incident-title">
+                      <h3>
+                        {
+                          activeIncident.title
+                        }
+                      </h3>
 
-                    <h3>
-                      Water Pipeline Failure
-                    </h3>
+                      <StatusBadge
+                        status={
+                          activeIncident.status
+                        }
+                      />
 
-                    <StatusBadge status="CRITICAL" />
+                    </div>
+
+                    <p>
+                      <MapPin size={14} />
+
+                      {
+                        activeIncident
+                          .location
+                      }
+                    </p>
 
                   </div>
 
-                  <p>
-                    <MapPin size={14} />
-                    250m away
-                  </p>
+                  <div className="impact-grid">
+
+                    <div>
+                      <strong>
+                        {
+                          activeIncident
+                            .reports
+                        }
+                      </strong>
+
+                      <span>
+                        Reports
+                      </span>
+                    </div>
+
+                    <div>
+                      <strong>
+                        {
+                          activeIncident
+                            .affected
+                        }
+                      </strong>
+
+                      <span>
+                        Affected
+                      </span>
+                    </div>
+
+                    <div>
+                      <strong>
+                        {
+                          activeIncident
+                            .priority
+                        }
+                      </strong>
+
+                      <span>
+                        Priority
+                      </span>
+                    </div>
+
+                  </div>
+
+                  <button
+                    className="primary-button full-width"
+                    onClick={() =>
+                      setSelectedIncident(
+                        activeIncident
+                      )
+                    }
+                  >
+                    View incident
+
+                    <ArrowRight
+                      size={16}
+                    />
+                  </button>
 
                 </div>
-
-
-                <div className="impact-grid">
-
-                  <div>
-                    <strong>128</strong>
-                    <span>Reports</span>
-                  </div>
-
-                  <div>
-                    <strong>2,400</strong>
-                    <span>Affected</span>
-                  </div>
-
-                  <div>
-                    <strong>94</strong>
-                    <span>Impact score</span>
-                  </div>
-
-                </div>
-
-
-                <button
-                  className="primary-button full-width"
-                  onClick={() =>
-                    setSelectedIncident(activeIncident)
-                  }
-                >
-                  View incident
-                  <ArrowRight size={16} />
-                </button>
-
-              </div>
+              )}
 
             </div>
-
 
             {/* ===== QUICK ACTIONS ===== */}
 
@@ -791,50 +1304,81 @@ export default function AuthorityDashboard() {
 
               </div>
 
-
               <div className="quick-actions">
 
-                <button>
-
-                  <CircleAlert size={18} />
+                <button
+                  onClick={() =>
+                    setFilter(
+                      "CRITICAL"
+                    )
+                  }
+                >
+                  <CircleAlert
+                    size={18}
+                  />
 
                   Review critical issues
 
-                  <ChevronRight size={16} />
-
+                  <ChevronRight
+                    size={16}
+                  />
                 </button>
 
+                <button
+                  onClick={() =>
+                    activeIncident &&
+                    setSelectedIncident(
+                      activeIncident
+                    )
+                  }
+                >
+                  <Building2
+                    size={18}
+                  />
 
-                <button>
+                  Review top issue
 
-                  <Building2 size={18} />
-
-                  Assign department
-
-                  <ChevronRight size={16} />
-
+                  <ChevronRight
+                    size={16}
+                  />
                 </button>
 
-
-                <button>
-
+                <button
+                  onClick={() =>
+                    document
+                      .getElementById(
+                        "map"
+                      )
+                      ?.scrollIntoView({
+                        behavior:
+                          "smooth",
+                      })
+                  }
+                >
                   <MapPin size={18} />
 
                   Open city map
 
-                  <ChevronRight size={16} />
-
+                  <ChevronRight
+                    size={16}
+                  />
                 </button>
 
+                <button
+                  onClick={() => {
+                    setFilter("All");
+                    setSearch("");
+                  }}
+                >
+                  <FileText
+                    size={18}
+                  />
 
-                <button>
+                  View all issues
 
-                  <FileText size={18} />
-
-                  View unresolved issues
-
-                  <ChevronRight size={16} />
-
+                  <ChevronRight
+                    size={16}
+                  />
                 </button>
 
               </div>
@@ -844,7 +1388,6 @@ export default function AuthorityDashboard() {
           </div>
 
         </section>
-
 
         {/* ================= DEPARTMENTS ================= */}
 
@@ -865,7 +1408,6 @@ export default function AuthorityDashboard() {
             </div>
 
           </div>
-
 
           <div className="department-list">
 
@@ -907,7 +1449,9 @@ export default function AuthorityDashboard() {
 
                 <div className="department-name">
 
-                  <Building2 size={18} />
+                  <Building2
+                    size={18}
+                  />
 
                   <strong>
                     {dept[0]}
@@ -916,37 +1460,60 @@ export default function AuthorityDashboard() {
                 </div>
 
                 <div className="department-stat">
-                  <strong>{dept[1]}</strong>
-                  <span>Open</span>
+                  <strong>
+                    {dept[1]}
+                  </strong>
+
+                  <span>
+                    Open
+                  </span>
                 </div>
 
                 <div className="department-stat">
-                  <strong>{dept[2]}</strong>
-                  <span>In progress</span>
+                  <strong>
+                    {dept[2]}
+                  </strong>
+
+                  <span>
+                    In progress
+                  </span>
                 </div>
 
                 <div className="department-stat">
-                  <strong>{dept[3]}</strong>
-                  <span>Resolved</span>
+                  <strong>
+                    {dept[3]}
+                  </strong>
+
+                  <span>
+                    Resolved
+                  </span>
                 </div>
 
                 <div className="response-time">
-                  <span>Avg. response</span>
-                  <strong>{dept[4]}</strong>
+
+                  <span>
+                    Avg. response
+                  </span>
+
+                  <strong>
+                    {dept[4]}
+                  </strong>
+
                 </div>
 
               </div>
-
             ))}
 
           </div>
 
         </section>
 
-
         {/* ================= RECENT ACTIVITY ================= */}
 
-        <section className="dashboard-card activity-card">
+        <section
+          className="dashboard-card activity-card"
+          id="analytics"
+        >
 
           <div className="card-header">
 
@@ -957,7 +1524,7 @@ export default function AuthorityDashboard() {
               </p>
 
               <h2>
-                Latest actions
+                Latest reports
               </h2>
 
             </div>
@@ -966,103 +1533,68 @@ export default function AuthorityDashboard() {
               className="icon-button"
               aria-label="More actions"
             >
-              <MoreHorizontal size={19} />
+              <MoreHorizontal
+                size={19}
+              />
             </button>
 
           </div>
 
-
           <div className="activity-list">
 
-            <div className="activity-row">
+            {incidents
+              .slice(0, 5)
+              .map((incident) => (
 
-              <div className="activity-dot blue" />
+                <div
+                  className="activity-row"
+                  key={incident.id}
+                >
 
-              <div>
-                <strong>
-                  Water Pipeline Failure
-                </strong>
+                  <div
+                    className={`activity-dot ${
+                      incident.status ===
+                      "CRITICAL"
+                        ? "red"
+                        : incident.status ===
+                          "HIGH"
+                        ? "amber"
+                        : "blue"
+                    }`}
+                  />
 
-                <p>
-                  Assigned to Water &amp; Sanitation
-                </p>
-              </div>
+                  <div>
 
-              <span>
-                5 min ago
-              </span>
+                    <strong>
+                      {incident.title}
+                    </strong>
 
-            </div>
+                    <p>
+                      New citizen report
+                    </p>
 
+                  </div>
 
-            <div className="activity-row">
+                  <span>
+                    {incident.time}
+                  </span>
 
-              <div className="activity-dot amber" />
+                </div>
 
-              <div>
-                <strong>
-                  Streetlight Outage
-                </strong>
+              ))}
 
-                <p>
-                  Marked In Progress
-                </p>
-              </div>
-
-              <span>
-                18 min ago
-              </span>
-
-            </div>
-
-
-            <div className="activity-row">
-
-              <div className="activity-dot teal" />
-
-              <div>
-                <strong>
-                  Garbage Accumulation
-                </strong>
-
-                <p>
-                  Resolved by Sanitation Team
-                </p>
-              </div>
-
-              <span>
-                1 hour ago
-              </span>
-
-            </div>
-
-
-            <div className="activity-row">
-
-              <div className="activity-dot red" />
-
-              <div>
-                <strong>
-                  Road Damage
-                </strong>
-
-                <p>
-                  Priority increased from 7.4 → 9.4
-                </p>
-              </div>
-
-              <span>
-                2 hours ago
-              </span>
-
-            </div>
+            {!loading &&
+              incidents.length === 0 && (
+                <div className="empty-state">
+                  No recent activity.
+                </div>
+              )}
 
           </div>
 
         </section>
 
       </main>
-
 
       {/* ================= INCIDENT MODAL ================= */}
 
@@ -1072,8 +1604,13 @@ export default function AuthorityDashboard() {
           className="modal-overlay"
           onClick={(event) => {
 
-            if (event.target === event.currentTarget) {
-              setSelectedIncident(null);
+            if (
+              event.target ===
+              event.currentTarget
+            ) {
+              setSelectedIncident(
+                null
+              );
             }
 
           }}
@@ -1084,68 +1621,149 @@ export default function AuthorityDashboard() {
             <button
               className="modal-close"
               onClick={() =>
-                setSelectedIncident(null)
+                setSelectedIncident(
+                  null
+                )
               }
               aria-label="Close incident"
             >
               <X size={20} />
             </button>
 
-
             <p className="eyebrow">
-              INCIDENT #{selectedIncident.id}
+              INCIDENT #
+              {
+                selectedIncident.id
+              }
             </p>
 
             <h2>
-              {selectedIncident.title}
+              {
+                selectedIncident.title
+              }
             </h2>
-
 
             <div className="modal-status-row">
 
               <StatusBadge
-                status={selectedIncident.status}
+                status={
+                  selectedIncident.status
+                }
               />
 
               <strong>
-                Priority {selectedIncident.priority}/10
+                Priority{" "}
+                {
+                  selectedIncident.priority
+                }
+                /10
               </strong>
 
             </div>
 
+            {/* IMAGE */}
+
+            {selectedIncident.imageUrl && (
+              <div
+                style={{
+                  marginTop: "20px",
+                  borderRadius: "14px",
+                  overflow: "hidden",
+                }}
+              >
+                <img
+                  src={
+                    selectedIncident.imageUrl
+                  }
+                  alt={
+                    selectedIncident.title
+                  }
+                  style={{
+                    width: "100%",
+                    maxHeight: "280px",
+                    objectFit: "cover",
+                    display: "block",
+                  }}
+                  onError={(event) => {
+                    event.currentTarget.style.display =
+                      "none";
+                  }}
+                />
+              </div>
+            )}
 
             <div className="modal-info-grid">
 
               <div>
-                <span>Location</span>
+                <span>
+                  Location
+                </span>
+
                 <strong>
-                  {selectedIncident.location}
+                  {
+                    selectedIncident
+                      .location
+                  }
                 </strong>
               </div>
 
               <div>
-                <span>Reports</span>
+                <span>
+                  Reports
+                </span>
+
                 <strong>
-                  {selectedIncident.reports}
+                  {
+                    selectedIncident
+                      .reports
+                  }
                 </strong>
               </div>
 
               <div>
-                <span>Affected</span>
+                <span>
+                  Affected
+                </span>
+
                 <strong>
-                  {selectedIncident.affected}
+                  {
+                    selectedIncident
+                      .affected
+                  }
                 </strong>
               </div>
 
               <div>
-                <span>Category</span>
+                <span>
+                  Category
+                </span>
+
                 <strong>
-                  {selectedIncident.category}
+                  {
+                    selectedIncident
+                      .category
+                  }
                 </strong>
               </div>
 
             </div>
 
+            {selectedIncident.description && (
+              <div className="modal-section">
+
+                <p className="eyebrow">
+                  CITIZEN REPORT
+                </p>
+
+                <p>
+                  {
+                    selectedIncident
+                      .description
+                  }
+                </p>
+
+              </div>
+            )}
 
             <div className="modal-section">
 
@@ -1156,29 +1774,65 @@ export default function AuthorityDashboard() {
               <div className="modal-analysis">
 
                 <div>
-                  <span>Severity</span>
-                  <strong>10/10</strong>
+                  <span>
+                    Severity
+                  </span>
+
+                  <strong>
+                    {Math.min(
+                      selectedIncident
+                        .severity,
+                      100
+                    ) / 10}
+                    /10
+                  </strong>
                 </div>
 
                 <div>
-                  <span>Public Impact</span>
-                  <strong>9/10</strong>
+                  <span>
+                    Infrastructure Risk
+                  </span>
+
+                  <strong>
+                    {Math.min(
+                      selectedIncident
+                        .infrastructureRisk,
+                      100
+                    ) / 10}
+                    /10
+                  </strong>
                 </div>
 
                 <div>
-                  <span>Urgency</span>
-                  <strong>10/10</strong>
+                  <span>
+                    Priority
+                  </span>
+
+                  <strong>
+                    {
+                      selectedIncident
+                        .priority
+                    }
+                    /10
+                  </strong>
                 </div>
 
                 <div>
-                  <span>Location Risk</span>
-                  <strong>10/10</strong>
+                  <span>
+                    Status
+                  </span>
+
+                  <strong>
+                    {
+                      selectedIncident
+                        .complaintStatus
+                    }
+                  </strong>
                 </div>
 
               </div>
 
             </div>
-
 
             <div className="modal-recommendation">
 
@@ -1187,31 +1841,52 @@ export default function AuthorityDashboard() {
               <div>
 
                 <strong>
-                  AI Recommendation
+                  Authority Recommendation
                 </strong>
 
                 <p>
-                  Immediate intervention recommended.
-                  Dispatch Water &amp; Sanitation
-                  immediately.
+                  Review the report and
+                  assign it to the
+                  appropriate municipal
+                  department.
                 </p>
 
               </div>
 
             </div>
 
-
             <div className="modal-actions">
 
-              <button className="primary-button">
+              <button
+                className="primary-button"
+                onClick={() =>
+                  alert(
+                    "Department assignment will be connected next."
+                  )
+                }
+              >
                 Assign Department
               </button>
 
-              <button className="secondary-button">
+              <button
+                className="secondary-button"
+                onClick={() =>
+                  alert(
+                    "Status update will be connected next."
+                  )
+                }
+              >
                 Update Status
               </button>
 
-              <button className="success-button">
+              <button
+                className="success-button"
+                onClick={() =>
+                  alert(
+                    "Resolve action will be connected next."
+                  )
+                }
+              >
                 Mark Resolved
               </button>
 
